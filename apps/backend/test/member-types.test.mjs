@@ -1,0 +1,34 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {createApplication} from '../src/server.mjs';
+test('member type rename updates account and independent personnel while preserving roles and media',async t=>{
+ const password='member-type-test-123',app=createApplication({dir:mkdtempSync(join(tmpdir(),'pm-member-type-')),password});
+ await new Promise(r=>app.server.listen(0,'127.0.0.1',r));t.after(()=>app.close());
+ const base=`http://127.0.0.1:${app.server.address().port}/api`;
+ async function call(path,actor,method='GET',data){const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json',...(actor?{Cookie:actor.cookie,'X-CSRF-Token':actor.csrf}:{})},body:data===undefined?undefined:JSON.stringify(data)});return {status:r.status,value:r.headers.get('content-type')?.includes('json')?await r.json():await r.text(),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+ const signed=await call('/login',null,'POST',{account:'admin',password}),admin={...signed.value,cookie:signed.cookie};
+ const teacher=(await call('/users',admin,'POST',{account:'type-teacher',name:'类型教师',role:'导师',password})).value;
+ const person=(await call('/organization/people',admin,'POST',{name:'独立类型人员'})).value.people.find(p=>p.name==='独立类型人员');
+ assert.equal(person.type,'专业教师');
+ const media={name:'note.txt',data:'data:text/plain;base64,aGVsbG8='};
+ assert.equal((await call('/organization/people/'+person.id+'/profile',admin,'PUT',{...person,revision:person.organizationRevision,type:'专业教师',direction:'类型测试',attachments:[media],images:[]})).status,200);
+ const old=app.db.prepare('SELECT * FROM users WHERE id=?').get(teacher.id);
+ const dict=(await call('/dictionaries',admin)).value.memberTypes.find(d=>d.name==='专业教师');
+ const login=await call('/login',null,'POST',{account:'type-teacher',password}),regular={...login.value,cookie:login.cookie};
+ assert.equal((await call('/dictionaries/'+dict.id,regular,'PUT',{name:'研究人员'})).status,403);
+ assert.equal((await call('/dictionaries/'+dict.id,admin,'PUT',{name:'研究人员'})).status,200);
+ const updated=app.db.prepare('SELECT * FROM users WHERE id=?').get(teacher.id);
+ assert.equal(JSON.parse(updated.profile).type,'研究人员');assert.equal(updated.role,old.role);assert.equal(updated.password,old.password);assert.equal(updated.revision,old.revision+1);
+ const people=(await call('/organization',admin)).value.people;
+ const changed=people.find(p=>p.id===person.id);assert.equal(changed.type,'研究人员');assert.equal(changed.direction,'类型测试');assert.equal(changed.attachments.length,1);
+ assert.equal((await call(changed.attachments[0].data.slice(4),admin)).status,200);
+ assert.equal((await call('/dictionaries/'+dict.id,admin,'DELETE',{})).status,409);
+ assert.equal((await call('/organization/people',admin,'POST',{name:'改名后新人员'})).value.people.find(p=>p.name==='改名后新人员').type,'研究人员');
+ const other=(await call('/dictionaries',admin)).value.memberTypes.find(d=>d.id!==dict.id);
+ assert.equal((await call('/dictionaries/'+dict.id,admin,'PUT',{name:other.name})).status,409);
+ assert.equal((await call('/dictionaries/'+dict.id,admin,'PUT',{name:''})).status,400);
+ assert.deepEqual(app.db.prepare('PRAGMA foreign_key_check').all(),[]);
+});

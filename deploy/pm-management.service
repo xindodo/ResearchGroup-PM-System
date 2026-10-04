@@ -1,0 +1,27 @@
+[Unit]
+Description=ResearchGroup project management system (pm.jtgc.cc)
+After=network.target
+
+[Service]
+Type=simple
+User=www
+Group=www
+WorkingDirectory=/www/wwwroot/jtgc.cc/pm
+ExecStart=/www/server/nodejs/v24.21.0/bin/node apps/backend/src/server.mjs
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=18082
+Environment=JTGC_SECURE_COOKIE=1
+Environment=JTGC_ORIGINS=https://pm.jtgc.cc
+Environment=JTGC_DATA_DIR=/www/wwwroot/jtgc.cc/pm/data
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/www/wwwroot/jtgc.cc/pm/data
+
+[Install]
+WantedBy=multi-user.target

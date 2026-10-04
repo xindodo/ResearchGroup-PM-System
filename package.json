@@ -1,0 +1,16 @@
+{
+  "name": "researchgroup-pm-system",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/local-app.mjs",
+    "build": "npm --prefix apps/frontend run build",
+    "start": "node apps/backend/src/server.mjs",
+    "backup": "node apps/backend/src/backup.mjs",
+    "test:api": "npm --prefix apps/backend test",
+    "test:projects": "npm --prefix apps/frontend run test:projects",
+    "test": "npm run test:api && npm --prefix apps/frontend run test:time-summary && npm --prefix apps/frontend run test:account-csv && npm run test:projects"
+  },
+  "engines": {
+    "node": ">=24.14 <25"
+  }
+}

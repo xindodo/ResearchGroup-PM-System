@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {openDatabase} from '../src/database.mjs';
+import {createApplication} from '../src/server.mjs';
+test('student competition migration preserves record identity, files, ordering and deletion state, runs once',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'jtgc-students-'));let db=openDatabase(dir);
+ db.prepare('DELETE FROM migrations WHERE version=3').run();
+ db.prepare('INSERT INTO users(id,account,name,role,password,created_at) VALUES(?,?,?,?,?,?)').run('u','u','老师甲','专业教师','unchanged','2026');
+ const payload={kind:'achievements',category:'学生竞赛',owner:'老师甲',title:'旧竞赛',participants:['学生甲','学生乙'],attachments:[{name:'附件',data:'/api/files/f'}],images:[{name:'图片'}],summary:'完整正文'};
+ db.prepare('INSERT INTO records(id,kind,creator,state,payload,created_at,updated_at,deleted) VALUES(?,?,?,?,?,?,?,?)').run('r','achievements','u','published',JSON.stringify(payload),'2026','2026',1);
+ db.prepare('INSERT INTO participants VALUES(?,?,?,?)').run('r',1,'学生甲',null);
+ db.prepare('INSERT INTO files VALUES(?,?,?,?,?,?,?)').run('f','record','r','附件','text/plain',1,'hash');
+ const files=db.prepare('SELECT * FROM files').all(), participants=db.prepare('SELECT * FROM participants').all();
+ db.close();db=openDatabase(dir);const r=db.prepare("SELECT * FROM records WHERE id='r'").get();
+ assert.equal(r.kind,'students');assert.equal(r.deleted,1);assert.equal(r.revision,2);
+ assert.deepEqual(JSON.parse(r.payload),{...payload,kind:'students',owner:'',advisor:'老师甲'});
+ assert.deepEqual(db.prepare('SELECT * FROM files').all(),files);assert.deepEqual(db.prepare('SELECT * FROM participants').all(),participants);
+ assert.equal(db.prepare("SELECT count(*) AS n FROM dictionaries WHERE scope='achievements' AND name='学生竞赛'").get().n,0);
+ db.close();db=openDatabase(dir);assert.equal(db.prepare("SELECT revision FROM records WHERE id='r'").get().revision,2);db.close();
+});
+test('students accept manual host and existing advisor, persist and import without changing teacher host rules',async t=>{
+ const app=createApplication({dir:mkdtempSync(join(tmpdir(),'jtgc-student-api-')),password:'test-password-123'});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));t.after(()=>app.close());
+ const base=`http://127.0.0.1:${app.server.address().port}/api`;
+ const login=await fetch(base+'/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({account:'admin',password:'test-password-123'})});const session=await login.json();
+ const headers={'Content-Type':'application/json',Cookie:login.headers.get('set-cookie').split(';')[0],'X-CSRF-Token':session.csrf};
+ const call=(path,data)=>fetch(base+path,{method:'POST',headers,body:JSON.stringify(data)});
+ await call('/users',{account:'t',name:'老师甲',role:'导师',password:'test-password-123'});
+ const data={kind:'students',title:'学生项目',category:'学生项目',owner:'未建账号的学生',advisor:'老师甲',year:'2026',participants:['学生乙','学生甲']};
+ const saved=await call('/records',data);assert.equal(saved.status,201);assert.equal((await saved.json()).advisor,'老师甲');
+ assert.equal((await call('/records',{...data,advisor:'未知老师'})).status,400);
+ assert.equal((await call('/records',{...data,owner:''})).status,400);
+ assert.equal((await call('/records',{...data,kind:'achievements',category:'教学竞赛'})).status,400);
+ assert.equal((await call('/import',{records:[data]})).status,201);
+});

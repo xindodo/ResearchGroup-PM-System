@@ -1,0 +1,14 @@
+{
+  "name": "researchgroup-pm-api",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=24.14 <25"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "backup": "node src/backup.mjs"
+  }
+}

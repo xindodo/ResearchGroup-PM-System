@@ -1,0 +1,58 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createApplication } from '../src/server.mjs';
+const password = 'local-test-password-123';
+test('API authentication, access control, ordered records, files, review, dictionaries and persistence', async t => {
+  const dir = mkdtempSync(join(tmpdir(),'jtgc-api-'));
+  let app = createApplication({ dir, password }); await new Promise(r => app.server.listen(0,'127.0.0.1',r));
+  let base = `http://127.0.0.1:${app.server.address().port}`;
+  t.after(async () => { if (app) await app.close(); });
+  async function call(path, { actor, method='GET', data, headers={} }={}) {
+    const res = await fetch(base+'/api'+path,{method,headers:{ ...(data !== undefined ? {'Content-Type':'application/json'} : {}), ...(actor ? {Cookie:actor.cookie,'X-CSRF-Token':actor.csrf} : {}),...headers},body:data !== undefined ? JSON.stringify(data) : undefined});
+    const value = res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text(); return { status:res.status, value, res };
+  }
+  async function login(account='admin') { const r = await call('/login',{method:'POST',data:{account,password}}); assert.equal(r.status,200); return {...r.value,cookie:r.res.headers.get('set-cookie').split(';')[0]}; }
+  assert.equal((await call('/bootstrap')).status,401);
+  assert.equal((await call('/login',{method:'POST',data:{account:'admin',password:'bad'}})).status,401);
+  const admin = await login(); assert.match(admin.cookie,/jtgc_session=/);
+  assert.equal((await call('/users',{actor:admin,method:'POST',data:{},headers:{'X-CSRF-Token':''}})).status,403);
+  assert.equal((await call('/users',{actor:admin,method:'POST',data:{},headers:{Origin:'https://evil.example'}})).status,403);
+  const add = async (account,name,role) => { const r=await call('/users',{actor:admin,method:'POST',data:{account,name,role,password}}); assert.equal(r.status,201); return r.value; };
+  const teacherUser = await add('teacher','教师甲','导师'); await add('other','教师乙','导师'); await add('director','主任','导师');
+  const teacher=await login('teacher'),other=await login('other'),director=await login('director');
+  assert.equal((await call('/users',{actor:teacher})).status,403);
+  const record = {kind:'achievements',title:'成果排序测试',category:'教学竞赛',owner:'教师甲',participants:['外部教师','教师乙','教师甲'],achievementSource:'教育部',achievementGrade:'一等奖',year:'2026',attachments:[{name:'note.txt',data:'data:text/plain;base64,aGVsbG8='}],images:[]};
+  let created=await call('/records',{actor:teacher,method:'POST',data:record}); assert.equal(created.status,201); let r=created.value;
+  assert.equal(r.state,'published'); assert.deepEqual(r.participants,record.participants);
+  assert.equal((await call(`/records/${r.id}`,{actor:other})).status,200);
+  assert.equal((await call(`/records/${r.id}/review`,{actor:admin,method:'POST',data:{revision:r.revision,state:'rejected',note:'补充材料'}})).status,410);
+  r=(await call(`/records/${r.id}`,{actor:teacher,method:'PUT',data:{...r,title:'修改后成果'}})).value;
+  assert.equal(r.state,'published');
+  assert.equal((await call(`/records/${r.id}`,{actor:teacher,method:'PUT',data:{...r,revision:0}})).status,409);
+  assert.equal((await call(`/records/${r.id}`,{actor:other})).status,200);
+  const sharedEdit=await call(`/records/${r.id}`,{actor:other,method:'PUT',data:r});assert.equal(sharedEdit.status,200);r=sharedEdit.value;
+  assert.equal((await call(`/records/${r.id}`,{actor:other,method:'DELETE',data:{revision:r.revision}})).status,403);
+  assert.equal((await call(r.attachments[0].data.slice(4),{actor:other})).value,'hello');
+  assert.equal((await call('/records',{actor:other,method:'POST',data:{...record,attachments:r.attachments}})).status,400);
+  assert.equal((await call('/records',{actor:teacher,method:'POST',data:{...record,participants:['重复','重复']}})).status,400);
+  const before=(await call('/records',{actor:admin})).value.length;
+  assert.equal((await call('/import',{actor:teacher,method:'POST',data:{records:[record,{...record,title:''}]}})).status,400);
+  assert.equal((await call('/records',{actor:admin})).value.length,before);
+  const imported=await call('/import',{actor:admin,method:'POST',data:{records:[record]}}); assert.equal(imported.status,201);
+  assert.deepEqual(imported.value[0].participants,record.participants);
+  const dict=(await call('/dictionaries',{actor:admin})).value.achievements.find(d=>d.name==='教学竞赛');
+  assert.equal((await call(`/dictionaries/${dict.id}`,{actor:admin,method:'DELETE',data:{}})).status,409);
+  assert.equal((await call(`/dictionaries/${dict.id}`,{actor:admin,method:'PUT',data:{name:'教师竞赛'}})).status,200);
+  assert.equal((await call(`/records/${r.id}`,{actor:teacher})).value.category,'教师竞赛');
+  assert.equal((await call('/audit',{actor:teacher})).status,403); assert.ok((await call('/audit',{actor:admin})).value.total>5);
+  assert.equal((await call(`/users/${teacherUser.id}`,{actor:teacher,method:'PUT',data:{revision:1,role:'系统管理员',active:true}})).status,403);
+  assert.equal((await call(`/users/${teacherUser.id}`,{actor:admin,method:'PUT',data:{revision:1,role:'导师',active:false}})).status,200);
+  assert.equal((await call('/bootstrap',{actor:teacher})).status,401);
+  await app.close(); app=null;
+  app=createApplication({dir,password}); await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve)); base=`http://127.0.0.1:${app.server.address().port}`;
+  const again=await login(); assert.ok((await call('/records',{actor:again})).value.length>=2);
+  assert.equal((await call('/bootstrap',{actor:again})).value.personnel.length,4);
+});

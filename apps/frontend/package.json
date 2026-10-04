@@ -1,0 +1,36 @@
+{
+  "name": "researchgroup-pm-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5178 --strictPort",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5178 --strictPort",
+    "test:projects": "playwright test --config playwright.projects.config.ts",
+    "test:time-summary": "node --test tests/time-summary.test.ts",
+    "test:account-csv": "node --test tests/account-csv.test.ts"
+  },
+  "dependencies": {
+    "@lucide/vue": "1.47.0",
+    "@toast-ui/editor": "^3.2.2",
+    "dompurify": "^3.4.15",
+    "exceljs": "^4.4.0",
+    "marked": "^18.0.14",
+    "vue": "3.5.43",
+    "vue-router": "^4.5.1"
+  },
+  "overrides": {
+    "dompurify": "$dompurify",
+    "exceljs": {
+      "uuid": "11.1.1"
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@vitejs/plugin-vue": "6.0.9",
+    "typescript": "~5.9.3",
+    "vite": "8.3.0",
+    "vue-tsc": "^3.1.0"
+  }
+}

@@ -1,0 +1,63 @@
+<script setup lang="ts">
+import { onMounted, ref, watch } from 'vue'
+import FeishuSettings from './FeishuSettings.vue'
+import { api, account, type Account } from '../api'
+import { memberRoles } from '../data'
+import { refreshData } from '../bootstrap'
+import { notify } from '../store'
+import { parseAccountExcel, downloadAccountTemplate, type ImportAccount } from '../account-excel'
+const props = defineProps<{ logs?: boolean; standalone?:boolean; projectTypes?:boolean }>()
+const emit=defineEmits<{'open-logs':[];back:[];updated:[];'select-types':[value:boolean]}>()
+const trash = ref<any[]>([])
+const tab = ref(props.projectTypes?'projectTypes':'users'), users = ref<Account[]>([]), dictionaries = ref<Record<string,{id:string;name:string}[]>>({})
+const scope = ref('news'), name = ref(''), error = ref(''), busy = ref(false), editId = ref('')
+const userDraft = ref({ account:'',name:'',password:'',role:'导师',active:true,revision:0 })
+const importOpen=ref(false), importRows=ref<ImportAccount[]>([]), importErrors=ref<{row:number;message:string}[]>([]), importReady=ref(false), importFile=ref(''), importMessage=ref('')
+function clearImport(){importRows.value=[];importErrors.value=[];importReady.value=false;importFile.value='';importMessage.value=''}
+async function downloadTemplate(){busy.value=true;error.value='';try{await downloadAccountTemplate()}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
+async function selectImport(event:Event){
+  const input=event.target as HTMLInputElement, file=input.files?.[0];clearImport();input.value='';if(!file)return
+  busy.value=true;error.value=''
+  try{if(!/\.xlsx$/i.test(file.name))throw Error('请选择Excel（.xlsx）文件');if(file.size>1024*1024)throw Error('导入文件不能超过1MB');importFile.value=file.name;importRows.value=await parseAccountExcel(await file.arrayBuffer());const result=await api('/users/import','POST',{users:importRows.value,dryRun:true});importErrors.value=result.errors;importReady.value=!result.errors.length}catch(e){clearImport();error.value=(e as Error).message}finally{busy.value=false}
+}
+async function importUsers(){busy.value=true;error.value='';try{const result=await api('/users/import','POST',{users:importRows.value});importErrors.value=result.errors;if(result.errors.length){importReady.value=false;return}clearImport();importMessage.value=`已成功导入${result.created}个账号`;await load();await refreshData();emit('updated');notify(importMessage.value)}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
+const logs = ref<{total:number;rows:any[]}>({total:0,rows:[]}), offset=ref(0)
+async function load() { try { if (props.logs) logs.value=await api(`/audit?offset=${offset.value}`); else { users.value=await api('/users'); dictionaries.value=await api('/dictionaries');trash.value=await api('/trash') } } catch(e){error.value=(e as Error).message} }
+onMounted(load)
+watch(()=>props.projectTypes,value=>{if(value)tab.value='projectTypes';else if(tab.value==='projectTypes')tab.value='users'})
+function selectTab(value:string){tab.value=value;if(value==='memberTypes')scope.value='memberTypes';name.value='';dictionaryEditId.value='';emit('select-types',value==='projectTypes')}
+const dictionaryEditId=ref(''), dictionaryEditName=ref('')
+function editDictionary(item:{id:string;name:string}){dictionaryEditId.value=item.id;dictionaryEditName.value=item.name;error.value=''}
+async function saveDictionary(){busy.value=true;error.value='';try{dictionaries.value=await api(`/dictionaries/${dictionaryEditId.value}`,'PUT',{name:dictionaryEditName.value});dictionaryEditId.value='';await refreshData();emit('updated');notify('名称已修改，关联人员资料已同步更新')}catch(e){error.value=(e as Error).message}finally{busy.value=false}}
+function reset() { editId.value='';userDraft.value={account:'',name:'',password:'',role:'导师',active:true,revision:0} }
+function edit(user: Account) { editId.value=user.id;userDraft.value={...user,password:''} }
+async function saveUser() { busy.value=true;error.value='';try{await api(editId.value?`/users/${editId.value}`:'/users',editId.value?'PUT':'POST',userDraft.value);reset();await load();await refreshData();emit('updated');notify('账号已保存')}catch(e){error.value=(e as Error).message}finally{busy.value=false} }
+async function addDictionary() { busy.value=true;error.value='';try{dictionaries.value=await api('/dictionaries','POST',{scope:scope.value,name:name.value});name.value='';await refreshData()}catch(e){error.value=(e as Error).message}finally{busy.value=false} }
+async function changeDictionary(item:{id:string;name:string},remove=false) {
+  const updated=remove?'':window.prompt('修改名称（已关联记录会同步更新）',item.name)
+  if(updated===null || (remove&&!window.confirm(`确定删除“${item.name}”？正在使用的选项不能删除。`)))return
+  busy.value=true;error.value='';try{dictionaries.value=await api(`/dictionaries/${item.id}`,remove?'DELETE':'PUT',{name:updated});await refreshData()}catch(e){error.value=(e as Error).message}finally{busy.value=false}
+}
+async function removeUser(user:Account){if(!window.confirm('确定删除未使用账号“'+user.name+'”？有关联数据的账号只能停用。'))return;try{await api('/users/'+user.id,'DELETE',{});await load();await refreshData();emit('updated')}catch(e){error.value=(e as Error).message}}
+async function restore(id:string){try{await api('/trash/'+id+'/restore','POST',{});await load();await refreshData();emit('updated');notify('记录已恢复')}catch(e){error.value=(e as Error).message}}
+async function page(delta:number){offset.value+=delta;await load()}
+</script>
+<template>
+  <div class="page-heading"><h1>{{ props.logs ? '操作日志' : '系统管理' }}</h1></div>
+  <template v-if="account?.role === '系统管理员'">
+    <p v-if="error" class="error" role="alert">{{ error }}</p>
+    <template v-if="props.logs"><button v-if="standalone" class="back-link text-button" @click="emit('back')">返回系统管理</button><RouterLink v-else to="/settings" class="back-link">返回系统管理</RouterLink><section class="panel"><div class="table-scroll"><table class="records-table"><thead><tr><th>时间</th><th>操作人员</th><th>操作</th><th>内容</th></tr></thead><tbody><tr v-for="row in logs.rows" :key="row.id"><td>{{ new Date(row.created_at).toLocaleString('zh-CN') }}</td><td>{{ row.actorName || row.actor }}</td><td>{{ row.action }}</td><td>{{ row.detail || row.target }}</td></tr></tbody></table></div><footer class="table-footer"><span>共{{ logs.total }}条</span><button :disabled="offset===0" @click="page(-50)">上一页</button><button :disabled="offset+50>=logs.total" @click="page(50)">下一页</button></footer></section></template>
+    <template v-else>
+      <div class="category-tabs"><button :class="{selected:tab==='users'}" @click="selectTab('users')">用户账号</button><button :class="{selected:tab==='memberTypes'}" @click="selectTab('memberTypes')">成员类型</button><button v-if="$slots['project-types']" :class="{selected:tab==='projectTypes'}" @click="selectTab('projectTypes')">项目类型</button><button v-if="$slots['project-sources']" :class="{selected:tab==='projectSources'}" @click="selectTab('projectSources')">项目来源</button><button v-if="$slots['task-types']" :class="{selected:tab==='taskTypes'}" @click="selectTab('taskTypes')">任务类型</button><button :class="{selected:tab==='feishu'}" @click="selectTab('feishu')">飞书通知</button><button :class="{selected:tab==='trash'}" @click="selectTab('trash')">回收站</button><button v-if="standalone" @click="emit('open-logs')">操作日志</button><RouterLink v-else to="/settings/logs" class="button">操作日志</RouterLink></div>
+      <template v-if="tab==='users'">
+        <section class="panel account-import"><div class="import-toolbar"><strong>批量导入账号</strong><button :disabled="busy" @click="downloadTemplate">下载导入模板</button><button :disabled="busy" @click="importOpen=!importOpen;clearImport()">{{ importOpen?'收起':'批量导入' }}</button></div><p v-if="importMessage" role="status">{{ importMessage }}</p><template v-if="importOpen"><p class="muted">下载并填写Excel（.xlsx）模板后导入。每次最多500个账号；账号、姓名和初始密码必填，角色留空默认为导师，密码须为10至128位。已存在的账号或姓名不会被覆盖。可用角色：{{ memberRoles.join('、') }}。</p><label class="import-file">选择导入文件<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" :disabled="busy" @change="selectImport"></label><template v-if="importRows.length"><p>{{ importFile }} · {{ importRows.length }}个账号 · {{ importReady?'校验通过，确认后创建':'校验未通过，未创建账号' }}</p><ul v-if="importErrors.length" class="error" role="alert"><li v-for="(item,index) in importErrors" :key="index">第{{ item.row }}行：{{ item.message }}</li></ul><div class="table-scroll import-preview"><table class="records-table"><thead><tr><th>行号</th><th>账号</th><th>姓名</th><th>角色</th><th>初始密码</th></tr></thead><tbody><tr v-for="(row,index) in importRows" :key="index"><td>{{ index+2 }}</td><td>{{ row.account }}</td><td>{{ row.name }}</td><td>{{ row.role }}</td><td>已填写</td></tr></tbody></table></div><div class="actions"><button class="primary" :disabled="busy||!importReady" @click="importUsers">{{ busy?'处理中…':`确认导入${importRows.length}个账号` }}</button><button :disabled="busy" @click="clearImport">清空</button></div></template></template></section>
+        <form class="panel" @submit.prevent="saveUser"><h2>{{ editId?'编辑账号':'新增账号' }}</h2><div class="form-grid"><label>账号<input v-model.trim="userDraft.account" :disabled="!!editId" required maxlength="150"></label><label>姓名<input v-model.trim="userDraft.name" required maxlength="100"></label><label>角色<select v-model="userDraft.role"><option v-for="r in memberRoles" :key="r">{{ r }}</option></select></label><label>{{ editId?'重置密码（留空不修改）':'初始密码' }}<input v-model="userDraft.password" type="password" autocomplete="new-password" :required="!editId" minlength="10" maxlength="128"></label><label v-if="editId">启用状态<select v-model="userDraft.active"><option :value="true">启用</option><option :value="false">停用</option></select></label></div><p class="muted">密码至少10位。停用账号保留其成果与历史关联；当前管理员不能停用自己。</p><div class="actions"><button v-if="editId" type="button" @click="reset">取消</button><button class="primary" :disabled="busy">保存账号</button></div></form>
+        <section class="panel"><div class="table-scroll"><table class="records-table"><thead><tr><th>姓名</th><th>账号</th><th>角色</th><th>启用</th><th>操作</th></tr></thead><tbody><tr v-for="u in users" :key="u.id"><td>{{ u.name }}</td><td>{{ u.account }}</td><td>{{ u.role }}</td><td>{{ u.active?'是':'否' }}</td><td><button @click="edit(u)">编辑账号</button><button v-if="u.id!==account.id" @click="removeUser(u)">删除</button></td></tr></tbody></table></div></section>
+      </template>
+      <template v-else-if="tab==='memberTypes'"><form class="panel" @submit.prevent="addDictionary"><h2>成员类型</h2><p class="muted">修改名称会同步更新已有账号和单位人员的成员类型，不改变账号角色及权限。正在使用的类型不能删除。</p><div class="form-grid"><label>新增名称<input v-model.trim="name" required maxlength="100"></label></div><button class="primary" :disabled="busy">添加选项</button></form><section class="panel"><div v-for="item in dictionaries[scope] || []" :key="item.id" class="dictionary-row"><form v-if="dictionaryEditId===item.id" class="dictionary-edit" @submit.prevent="saveDictionary"><input v-model.trim="dictionaryEditName" aria-label="成员类型名称" required maxlength="100" :disabled="busy"><button class="primary" :disabled="busy">保存名称</button><button type="button" :disabled="busy" @click="dictionaryEditId=''">取消</button></form><template v-else><span>{{ item.name }}</span><button :disabled="busy" @click="editDictionary(item)">修改名称</button></template><button :disabled="busy" @click="changeDictionary(item,true)">删除</button></div></section></template>
+      <template v-else-if="tab==='projectTypes'"><slot name="project-types" /></template><template v-else-if="tab==='projectSources'"><slot name="project-sources" /></template><template v-else-if="tab==='taskTypes'"><slot name="task-types" /></template>
+      <FeishuSettings v-else-if="tab==='feishu'" /><section v-else class="panel"><p v-if="!trash.length" class="quiet-empty">暂无已删除记录</p><div v-for="r in trash" :key="r.id" class="dictionary-row"><span>{{ r.title }}</span><button @click="restore(r.id)">恢复记录</button></div></section>
+    </template>
+  </template>
+</template>
+<style scoped>.form-grid{margin:13px 0}.dictionary-row{display:flex;align-items:center;gap:6px;padding:6px 0;border-bottom:1px solid var(--line)}.dictionary-row span{flex:1}.dictionary-edit{display:flex;align-items:center;gap:6px;flex:1;flex-wrap:wrap}.dictionary-edit input{flex:1;min-width:140px;width:auto}.actions{margin-top:10px}.import-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.import-toolbar strong{margin-right:auto}.import-preview{max-height:280px;overflow:auto}.import-file{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.import-file input{width:auto;max-width:100%}</style>

@@ -1,0 +1,26 @@
+# Local data and credentials
+.local/
+.env
+.env.*
+!.env.example
+
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+*.log
+*.tsbuildinfo
+
+# Editor and OS state
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+.DS_Store
+.aider*
+.helix/
+# Local dependency download cache
+.local-npm-cache/

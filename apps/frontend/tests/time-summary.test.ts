@@ -1,0 +1,15 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { chinaToday,weekRange,monthRange,summarizeHours,formatHours,decimalHours } from '../src/time-summary.ts'
+test('China calendar weeks run Monday to Sunday across year boundaries',()=>{
+ assert.equal(chinaToday(Date.parse('2026-09-30T16:00:00Z')),'2026-10-01');const week=weekRange('2021-01-03')!;assert.equal(week.label,'2020-12-28 — 2021-01-03');assert.equal(week.start,Date.parse('2020-12-28T00:00:00+08:00'));assert.equal(week.end,Date.parse('2021-01-04T00:00:00+08:00'));assert.deepEqual(weekRange('2020-12-28'),week);assert.equal(weekRange('2026-02-30'),null);assert.equal(weekRange(''),null)
+})
+test('natural months handle leap February, short months and year rollover',()=>{
+ const feb=monthRange('2024-02')!,dec=monthRange('2026-12')!;assert.equal((feb.end-feb.start)/86400000,29);assert.equal((monthRange('2026-02')!.end-monthRange('2026-02')!.start)/86400000,28);assert.equal(dec.end,Date.parse('2027-01-01T00:00:00+08:00'));assert.equal(monthRange('2026-13'),null);assert.equal(monthRange(''),null)
+})
+test('per-person totals aggregate projects and split sessions at exact week and month boundaries',()=>{
+ const entry=(start:string,end:string,userId='a')=>({start,end,userId,person:userId==='a'?'甲':'乙'});const projects=[{id:'p1',members:[{userId:'a',name:'甲'},{userId:'zero',name:'无工时成员'}],timeEntries:[entry('2026-09-30T23:30','2026-10-01T01:00'),entry('2026-10-04T23:00','2026-10-05T01:00'),entry('2026-09-01T10:00','2026-09-01T12:00')]},{id:'p2',members:[{userId:'a',name:'甲'},{userId:'b',name:'乙'}],timeEntries:[entry('2026-10-02T10:00','2026-10-02T12:00'),entry('2026-10-02T10:00','2026-10-02T11:00','b')]}];const all=summarizeHours(projects,weekRange('2026-10-02'),monthRange('2026-10'));const a=all.find(p=>p.userId==='a')!;assert.equal(a.totalMinutes,450);assert.equal(a.weekMinutes,270);assert.equal(a.monthMinutes,300);assert.equal(a.projectCount,2);assert.equal(a.recordCount,4);const local=summarizeHours([projects[0]!],weekRange('2026-10-02'),monthRange('2026-10')).find(p=>p.userId==='a')!;assert.equal(local.totalMinutes,330);assert.equal(local.weekMinutes,150);assert.equal(local.monthMinutes,180);const zero=all.find(p=>p.userId==='zero')!;assert.equal(zero.totalMinutes,0);assert.equal(zero.recordCount,0);assert.equal(all.find(p=>p.userId==='b')!.totalMinutes,60)
+})
+test('exclusive period boundaries do not double-count and historical members remain visible',()=>{
+ const p={id:'p',members:[],timeEntries:[{userId:'former',person:'历史人员',start:'2026-09-30T23:00',end:'2026-10-01T00:00'},{userId:'former',person:'历史人员',start:'2026-10-05T00:00',end:'2026-10-05T01:00'}]};const stat=summarizeHours([p],weekRange('2026-10-01'),monthRange('2026-10'))[0]!;assert.equal(stat.weekMinutes,60);assert.equal(stat.monthMinutes,60);assert.equal(stat.totalMinutes,120);assert.equal(stat.projectCount,1);assert.equal(formatHours(450),'07:30');assert.equal(decimalHours(450),'7.5');assert.equal(formatHours(60*125+7),'125:07');assert.equal(summarizeHours([p],null,null)[0]!.totalMinutes,120)
+})

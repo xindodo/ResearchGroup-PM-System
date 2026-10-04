@@ -1,0 +1,27 @@
+[Unit]
+Description=ResearchGroup project management application
+After=network.target
+
+[Service]
+Type=simple
+User=www
+Group=www
+WorkingDirectory=/www/wwwroot/whut.cc/jtgc
+ExecStart=/www/server/nodejs/v24.21.0/bin/node apps/backend/src/server.mjs
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=18080
+Environment=JTGC_SECURE_COOKIE=1
+Environment=JTGC_ORIGINS=https://jtgc.whut.cc
+Environment=JTGC_DATA_DIR=/www/wwwroot/whut.cc/jtgc/data
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/www/wwwroot/whut.cc/jtgc/data
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+import { DatabaseSync, backup } from 'node:sqlite';
+import { mkdirSync, cpSync, existsSync, writeFileSync } from 'node:fs';
+import { resolve, join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const dir = resolve(process.env.JTGC_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), '../../../.local/jtgc'));
+if (!existsSync(join(dir,'jtgc.sqlite'))) throw new Error('数据库不存在，请先启动系统');
+const target = join(dir,'backups',new Date().toISOString().replaceAll(':','-'));
+mkdirSync(target,{recursive:true,mode:0o700});
+const db = new DatabaseSync(join(dir,'jtgc.sqlite'));
+await backup(db,join(target,'jtgc.sqlite')); db.close();
+cpSync(join(dir,'uploads'),join(target,'uploads'),{recursive:true});
+if(existsSync(join(dir,'feishu-secret.key')))cpSync(join(dir,'feishu-secret.key'),join(target,'feishu-secret.key'));
+writeFileSync(join(target,'README.txt'),'恢复前停止API服务；先备份现有数据，再将jtgc.sqlite与uploads复制到数据目录。不可在运行时替换数据库；若包含feishu-secret.key，恢复时须同时保留该密钥文件以解密飞书配置。备份包含个人资料，请妥善保管。\n',{mode:0o600});
+console.log(`备份完成：${target}`);

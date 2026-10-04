@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew HTTPS certificate for pm.jtgc.cc
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pm-renew-cert

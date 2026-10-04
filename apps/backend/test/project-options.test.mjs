@@ -1,0 +1,45 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createApplication } from '../src/server.mjs';
+test('project unit and source catalogs enforce permissions, conflicts and reference preservation',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'jtgc-options-')),password='catalog-password-123';let app=createApplication({dir,password}),base;
+  async function start(){await new Promise(r=>app.server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${app.server.address().port}/api`;}
+  await start();t.after(()=>app.close());
+  async function call(path,actor,method='GET',data){const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json',...(actor?{Cookie:actor.cookie,'X-CSRF-Token':actor.csrf}:{})},body:data===undefined?undefined:JSON.stringify(data)});return {status:r.status,value:await r.json(),cookie:r.headers.get('set-cookie')?.split(';')[0]};}
+  const login=await call('/login',null,'POST',{account:'admin',password});const admin={...login.value,cookie:login.cookie};
+  await call('/users',admin,'POST',{account:'teacher',name:'教师',role:'导师',password});
+  const loginTeacher=await call('/login',null,'POST',{account:'teacher',password}),teacher={...loginTeacher.value,cookie:loginTeacher.cookie};
+  assert.equal((await call('/pm/options',null)).status,401);
+  assert.equal((await call('/pm/options',teacher,'POST',{scope:'units',name:'越权'})).status,403);
+  const created=await call('/pm/options',admin,'POST',{scope:'units',name:'交工系',contact:'赵老师',description:'牵头单位'});assert.equal(created.status,201);
+  let unit=created.value.find(o=>o.name==='交工系');
+  assert.equal((await call('/pm/options',admin,'POST',{scope:'units',name:'交工系'})).status,409);
+  assert.equal((await call('/pm/options',admin,'POST',{scope:'bad',name:'分类'})).status,400);
+  const source=(await call('/pm/options',admin,'POST',{scope:'sources',name:'国家基金'})).value.find(o=>o.scope==='sources');
+  const participant=(await call('/pm/options',admin,'POST',{scope:'participantUnits',name:'合作研究院',contact:'联系人',description:'机构说明'})).value.find(o=>o.scope==='participantUnits');
+  const project=(await call('/pm/projects',teacher,'POST',{title:'关联项目',unit:unit.name,sponsor:source.name,units:[{name:participant.name,role:'协作单位',contact:'项目联系人',duty:'项目职责'}]})).value;
+  assert.equal((await call('/pm/options/'+unit.id,admin,'DELETE',{revision:unit.revision})).status,409);
+  assert.equal((await call('/pm/options/'+unit.id,teacher,'PUT',{...unit,name:'越权修改'})).status,403);
+  const renamed=await call('/pm/options/'+unit.id,admin,'PUT',{...unit,name:'交通工程系'});assert.equal(renamed.status,200);unit=renamed.value.find(o=>o.id===unit.id);
+  assert.equal((await call('/pm/options/'+unit.id,admin,'PUT',{...unit,revision:1})).status,409);
+  const updated=(await call('/pm/projects/'+project.id,teacher)).value;assert.equal(updated.unit,'交通工程系');assert.equal(updated.revision,project.revision+1);
+  assert.equal((await call('/pm/projects/'+project.id,teacher,'PUT',project)).status,409);
+  assert.equal((await call('/pm/options/'+participant.id,admin,'DELETE',{revision:participant.revision})).status,409);
+  assert.equal((await call('/pm/options/'+participant.id,teacher,'PUT',{...participant,name:'越权改名'})).status,403);
+  assert.equal((await call('/pm/options/'+participant.id,admin,'PUT',{...participant,name:'合作研究中心'})).status,200);
+  assert.deepEqual((await call('/pm/projects/'+project.id,teacher)).value.units,[{name:'合作研究中心',role:'协作单位',contact:'项目联系人',duty:'项目职责'}]);
+  const unusedParticipant=(await call('/pm/options',admin,'POST',{scope:'participantUnits',name:'未使用合作单位'})).value.find(o=>o.name==='未使用合作单位');
+  assert.equal((await call('/pm/options/'+unusedParticipant.id,admin,'DELETE',{revision:unusedParticipant.revision})).status,200);
+  assert.equal((await call('/pm/options/'+source.id,admin,'PUT',{...source,name:'国家科研计划'})).status,200);
+  assert.equal((await call('/pm/projects/'+project.id,teacher)).value.sponsor,'国家科研计划');
+  const unused=(await call('/pm/options',admin,'POST',{scope:'units',name:'待删除单位'})).value.find(o=>o.name==='待删除单位');
+  assert.equal((await call('/pm/options/'+unused.id,admin,'DELETE',{revision:unused.revision})).status,200);
+  await app.close();app=createApplication({dir,password});await start();
+  const persisted=(await call('/pm/options',admin)).value;assert.ok(persisted.some(o=>o.name==='交通工程系'));assert.ok(!persisted.some(o=>o.name==='待删除单位'));
+  assert.equal((await call('/pm/projects/'+project.id,teacher)).value.unit,'交通工程系');
+  assert.equal((await call('/pm/projects/'+project.id,teacher)).value.units[0].name,'合作研究中心');
+  assert.ok((await call('/pm/options',admin)).value.some(o=>o.scope==='participantUnits'&&o.name==='合作研究中心'));
+});
